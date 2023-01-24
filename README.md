@@ -11,7 +11,7 @@
 ## Prerequisites
 - WSL is enabled and installed, C:\Windows\System32\wsl.exe is the executable path
 - Administrator access for the (un)mount command
-- [TEMPORARY] WSL Distribution is Ubuntu
+- [TEMPORARY] WSL Distribution HAS to be Ubuntu, a different one requires changes in the source code
 
 ## Setup
 - TODO: Add distro config

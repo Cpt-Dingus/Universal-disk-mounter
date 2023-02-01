@@ -2,7 +2,7 @@
 
 /*
  * Made by Cpt-Dingus
- * v0.2 - 24/01/2023
+ * v0.3 - 01/02/2023
  * CLI VERSION
  */
 
@@ -51,6 +51,33 @@ namespace disk_mounter
 
             //TODO: Distro Config
 
+            // Base checks
+
+            Console.WriteLine("Running base checks...");
+            const string wsl_dir = @"C:\Windows\System32\wsl.exe";
+            if (!File.Exists(wsl_dir))
+            {
+                Console.WriteLine(@"WSL executable not found! Please make sure it is installed and enabled at C:\Windows\System32\wsl.exe");
+                run_cmd("PAUSE"); Environment.Exit(1);
+            }
+
+
+            // This borked between builds, I have no damn idea why. Will leave it's fate up to god
+            /*
+            else if (!Directory.Exists(@"\\WSL$\"))
+            {
+                Console.WriteLine(@"\\WSL$\ not found!");
+                run_cmd("PAUSE"); Environment.Exit(1);
+            }*/
+
+            else if (run_cmd("net session").Item2 == 0)
+            {
+                Console.WriteLine("Detected elevated permissions, this program has to be run from an unelevated shell!");
+                run_cmd("PAUSE"); Environment.Exit(1);
+            }
+
+            // Clears base checks from history
+            run_cmd("cls");
 
             // -- Main  --
 
@@ -72,62 +99,69 @@ namespace disk_mounter
                     disk_list = run_cmd("GET-CimInstance -query \\\"SELECT DeviceID,Caption from Win32_DiskDrive\\\" | Select-Object DeviceID,Caption | Sort-Object DeviceID").Item1;
                     Console.WriteLine(disk_list);
 
-                    Console.Write("Select disk number:\n>");
-                    Console.SetCursorPosition(2, Console.CursorTop);
-                    disk_number = Console.ReadLine() ?? "NULL"; // Later used for SUBST command
-
-
-
-                    foreach (string line in disk_list.Split('\n'))
+                    while (true)
                     {
-                        string[] line_split = line.TrimEnd().Split(' ');
-                        if (line_split[0] == $"\\\\.\\PHYSICALDRIVE{disk_number}")
+                        Console.Write("Select disk number:\n>");
+                        Console.SetCursorPosition(2, Console.CursorTop);
+                        disk_number = Console.ReadLine() ?? "NULL"; // Later used for SUBST command
+
+
+                        // Gets selected disk label
+
+                        foreach (string line in disk_list.Split('\n'))
                         {
-                            disk_label = string.Join(" ", line_split.Skip(1).ToArray()) ?? "NULL";
-                        }
-                    }
-
-                    if (disk_label == "NULL")
-                    { throw new Exception("Disk label was read as NULL"); }
-
-
-                    // Disk label confirmation
-                    Console.WriteLine($"You selected {disk_label}, is that correct? [Y/N]\n>");
-                    Console.SetCursorPosition(2, Console.CursorTop - 1);
-                    string input = Console.ReadLine() ?? "NULL".ToLower();
-
-
-                    if (yes.Contains(input.ToLower()))
-
-                        while (dtc == true)
-                        {
-                            dtc = false; // While loop will end if no security detection is made
-                            Console.WriteLine("Please select desired drive letter:\n>");
-                            Console.SetCursorPosition(2, Console.CursorTop - 1);
-                            drive_letter = Console.ReadLine() ?? "C"; // C will mark as invalid
-
-                            if (!alphabet.Contains(drive_letter) || drive_letter.Length > 1 || Directory.Exists($"{drive_letter}:\\"))
-                            { Console.WriteLine("Letter already in use or invalid letter inputted!"); dtc = true; }
-
-
-
-
-                            else
+                            string[] line_split = line.TrimEnd().Split(' ');
+                            if (line_split[0] == $"\\\\.\\PHYSICALDRIVE{disk_number}")
                             {
+                                disk_label = string.Join(" ", line_split.Skip(1).ToArray()) ?? "NULL";
+                            }
+                        }
 
-                                // Loops through each line of "subst" to see if one already exists for specified drive letter
-                                foreach (var line in run_cmd("subst").Item1.Split('\n')) // Splits 'subst' into lines
+                        if (disk_label == "NULL")
+                        { throw new Exception("Disk label was read as NULL"); }
+
+
+                        // Disk label confirmation
+                        Console.WriteLine($"You selected {disk_label}, is that correct? [Y/N]\n>");
+                        Console.SetCursorPosition(2, Console.CursorTop - 1);
+                        string input = Console.ReadLine() ?? "NULL".ToLower();
+
+
+                        if (yes.Contains(input.ToLower()))
+                        {
+
+                            while (dtc == true)
+                            {
+                                dtc = false; // While loop will end if no security detection is made
+                                Console.WriteLine("Please select desired drive letter:\n>");
+                                Console.SetCursorPosition(2, Console.CursorTop - 1);
+                                drive_letter = Console.ReadLine() ?? "C"; // C will mark as invalid
+
+                                if (!alphabet.Contains(drive_letter) || drive_letter.Length > 1 || Directory.Exists($"{drive_letter}:\\"))
+                                { Console.WriteLine("Letter already in use or invalid letter inputted!"); dtc = true; }
+
+
+
+                                else
                                 {
 
-                                    if (line.Split(' ').Contains($@"{drive_letter.ToUpper()}:\:"))
+                                    // Loops through each line of "subst" to see if one already exists for specified drive letter
+                                    foreach (var line in run_cmd("subst").Item1.Split('\n')) // Splits 'subst' into lines
                                     {
-                                        Console.WriteLine($"{drive_letter} already SUBST-ed!"); dtc = true; break; // If the line contains the drive letter, break out of the for loo
+
+                                        if (line.Split(' ').Contains($@"{drive_letter.ToUpper()}:\:"))
+                                        {
+                                            Console.WriteLine($"{drive_letter} already SUBST-ed!"); dtc = true; break; // If the line contains the drive letter, break out of the for loo
+                                        }
+
                                     }
 
                                 }
-
                             }
+                            break;
                         }
+                        
+                    }
 
                     Console.WriteLine($"Selected {drive_letter}:\\");
 
@@ -159,7 +193,10 @@ namespace disk_mounter
                         // SUBSTs the localhosted WSL folder to an user selected drive letter
                         Console.WriteLine("Running SUBST on \\\\WSL$\\..");
                         if (run_cmd($"subst {drive_letter}: \\\\WSL$\\Ubuntu\\mnt\\wsl\\PHYSICALDRIVE{disk_number}p{part_number}").Item2 == 0)
-                        { Console.WriteLine("SUBST Succesful"); Console.WriteLine($"Partition succesfully mounted on {drive_letter}:\\"); run_cmd("PAUSE"); break; }
+                        {
+                            Console.WriteLine($"SUBST Succesful! \n Partition succesfully mounted on {drive_letter}:\\");
+                            Console.WriteLine("TEMPORARY: SUBST will only remain mounted as long as this window remains open, please don't close it. Fix is in development."); run_cmd("PAUSE"); break;
+                        }
 
                         else { Console.WriteLine(@"SUBST failed! (Is \\WSL$\ available?) "); run_cmd("PAUSE"); Environment.Exit(1); }
 
@@ -230,11 +267,13 @@ namespace disk_mounter
                     {
                         Console.WriteLine(@"Disk unmounted from WSL UNSUCCESFULLY! (Is it mounted? Check `\\WSL$\<distro>\mnt\wsl` to see if a disk folder is present)");
                         run_cmd("PAUSE");
+                        Environment.Exit(1);
                     }
                     else if (proc.ExitCode == 0)
                     {
                         Console.WriteLine("DIsk unmounted from WSL succesfully");
                         run_cmd("PAUSE");
+                        Environment.Exit(0);
                     }
                 }
 

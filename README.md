@@ -1,8 +1,5 @@
 # Universal-disk-mounter
 
-NOTE: This program is in an early ALPHA, currently only supports Ext4 mounting, as the `wsl --mount` command only supports file systems that the WSL KERNEL supports, NOT FUSE drivers (ie ntfs-3g)
-A fix is in the works.
-
 - Mounts partition to user selected drive letter
 - Uses WSL as backend
 - Supports any FS that has an appropriate driver installed in WSL (I.e. Reiserfs needs reiserfs-utils)
@@ -11,7 +8,7 @@ A fix is in the works.
 - WSL Doesn't support mounting USB devices as of writing this article
 - The disk label is set to "Disconnected network drive", while not affecting functionality (The folder is still accesible) it might cause confusion.
 - **SUBST Only works in the terminal session, the drive letter can only be mounted as long as the cmd windows remains open, this can be achieved by not pressing anything after the PAUSE command is called. The disk will remain mounted in ```\\WSL$\<distro>\mnt\wsl\``` indefinitely**
-- A solution for the above is in development, it will likely require running the process in the background though.
+- A solution for the above is in development, it will likely require running a separate process in the background though.
 
 ## Prerequisites
 - WSL is enabled and installed, C:\Windows\System32\wsl.exe is the executable path
@@ -29,4 +26,4 @@ A fix is in the works.
 
 --- 
 
-> GUI Version after full CLI functionality is achieved.
+> GUI Version coming after full CLI functionality is achieved.

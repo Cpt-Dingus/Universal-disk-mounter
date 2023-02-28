@@ -7,23 +7,22 @@
 ## Limitations
 - WSL Doesn't support mounting USB devices as of writing this article
 - The disk label is set to "Disconnected network drive", while not affecting functionality (The folder is still accesible) it might cause confusion.
-- **SUBST Only works in the terminal session, the drive letter can only be mounted as long as the cmd windows remains open, this can be achieved by not pressing anything after the PAUSE command is called. The disk will remain mounted in ```\\WSL$\<distro>\mnt\wsl\``` indefinitely**
-- A solution for the above is in development, it will likely require running a separate process in the background though.
+- SUBST only works while the terminal session remains open. The console will automatically unmount properly once the PAUSE command issued after a succesful mount is released.
+- A solution for the above will be made in the GUI version.
 
 ## Prerequisites
 - WSL is enabled and installed, C:\Windows\System32\wsl.exe is the executable path
 - Administrator access for the (un)mount command
-- [TEMPORARY] WSL Distribution HAS to be Ubuntu, a different one requires changes in the source code
+
 
 ## Setup
-- TODO: Add distro config
 - Building and running the raw exe should be fine as of now.
 
-## Usage
-- After building, run the .exe file in an **UNELEVATED** command prompt
-- Select operation mode [m/mount -> for mounting new pattitions, u/unmount -> for unmounting existing partitions]
-- Follow the instructions on screen to mount/unmount the partition
+1. After building, run the .exe file in an **UNELEVATED** command prompt
+2. Follow the instructions on screen to mount/unmount the partition
+3. Once it is mounted, leave the console open for the SUBST to not cancel.
+4. Once you want to close the session and unmount the disk, hit enter. This will automatically unmount the disk.
 
 --- 
 
-> GUI Version coming after full CLI functionality is achieved.
+> GUI Version in development.

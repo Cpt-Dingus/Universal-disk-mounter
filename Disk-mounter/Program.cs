@@ -3,7 +3,7 @@
 
 /*
  * Made by Cpt-Dingus
- * v0.4 - 09/02/2023
+ * v1.0 - 28/02/2023
  * CLI VERSION
  */
 
@@ -12,20 +12,23 @@
 
 namespace disk_mounter
 {
-    class program
+    class Program
     {
 
         // -- Functions --
-        public static Tuple<string, int> run_cmd(string cmd)
+        public static Tuple<string, int> run_cmd(string cmd, string file = "powershell.exe")
         {
-            Process process = new Process();
-            process.StartInfo.FileName = "powershell.exe";
+            Process process = new();
+            process.StartInfo.FileName = file;
             process.StartInfo.Arguments = $"-command \"{cmd}\"";
             process.StartInfo.UseShellExecute = false;
             process.StartInfo.RedirectStandardOutput = true;
+
             process.Start();
-            string output = process.StandardOutput.ReadToEnd();
+            // Fix for funky shit that stdout outputs to string
+            string output = process.StandardOutput.ReadToEnd().Replace("\0", "").Replace("\r", "");
             process.WaitForExit();
+
             return Tuple.Create(output, process.ExitCode);
         }
 
@@ -35,15 +38,15 @@ namespace disk_mounter
             // Doesn't have STDOUT because csharp is dumb and can't have UsesShellExecute set
             // to true with redirected STDOUT, but needs it to be true for it to run elevated
 
-            Process proc = new Process();
+            Process proc = new();
             proc.StartInfo.FileName = cmd;
             proc.StartInfo.Arguments = args;
             proc.StartInfo.Verb = "runas";
             proc.StartInfo.UseShellExecute = true;
 
             proc.Start();
-
             proc.WaitForExit();
+
             return proc.ExitCode;
 
 
@@ -52,337 +55,361 @@ namespace disk_mounter
         static void Main(string[] args)
         {
 
-            // -- Vars -- 
+            // --> Vars <-- 
 
-            string disk_number,
-                   disk_label = "NULL",
+            string disk_label = "NULL",
                    drive_letter = "",
+                   param_contents = "",
                    disk_list,
-                   subst_output = "",
-                   param_contents = "NONE";
+                   disk_number, // isn't an int because too lazy to figure out concat
+                   distro,
+                   part_name;
 
-
+            const string wsl_dir = @"C:\Windows\System32\wsl.exe";
 
             string[] yes = { "y", "yes" },
-                     mount = { "m", "mount" },
-                     unmount = { "u", "unmount" },
-                     quit = { "q", "quit", "null" },
-                     alphabet = { "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z" };
+                     alphabet = { "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z" },
+                     distro_list = Array.Empty<string>();
 
-            bool dtc = true;
+            bool dtc = true,
+                 subst_passed = false,
+                 wsl_mounted = false;
+
+            Dictionary<string, string> disk_info = new();
 
 
 
-            //TODO: Distro Config
 
-            // Base checks
+            // --> Base checks <--
 
             Console.WriteLine("Running base checks...");
-            const string wsl_dir = @"C:\Windows\System32\wsl.exe";
+
+            // Checks if wsl.exe exists
             if (!File.Exists(wsl_dir))
             {
                 Console.WriteLine(@"WSL executable not found! Please make sure it is installed and enabled at C:\Windows\System32\wsl.exe");
                 run_cmd("PAUSE"); Environment.Exit(1);
             }
 
-
-            // This borked between builds, I have no damn idea why. Will leave it's fate up to god
-            /*
-            else if (!Directory.Exists(@"\\WSL$\"))
-            {
-                Console.WriteLine(@"\\WSL$\ not found!");
-                run_cmd("PAUSE"); Environment.Exit(1);
-            }*/
-
+            // Checks if program is being run as admin
             else if (run_cmd("net session").Item2 == 0)
             {
                 Console.WriteLine("Detected elevated permissions, this program has to be run from an unelevated shell!");
                 run_cmd("PAUSE"); Environment.Exit(1);
             }
 
-            // Clears base checks from history
+            // Clears base checks from command line history
             run_cmd("cls");
 
-            // -- Main  --
 
-            while (true)
+
+
+
+
+
+
+            // --> Distro selection <--
+
+            foreach (string line in run_cmd("wsl --list --all").Item1.Split("\n")) // Gets each distro using WSL
             {
-                // MODE SELECT
-                Console.Write("Mount mode [M,Mount] OR Unmount mode [U,Unmomunt]?\n>");
+                // Excepts the starting line ("WSL Distributions:"), excludes docker
+                if (dtc || line.Contains("docker", StringComparison.CurrentCulture)) { dtc = false; continue; }
+
+                Array.Resize(ref distro_list, distro_list.Length + 1);
+                distro_list[distro_list.Length - 1] = line;
+            }
+
+            // Skips last blank line
+            Array.Resize(ref distro_list, distro_list.Length - 1);
+
+            dtc = true; // Manky solution to make sure an iteration is skipped but whatever, it works
+
+
+            // Prints distros out to the console
+            Console.WriteLine("Available distributions to use:");
+            for (int i = 0; i != distro_list.Length; i++) { Console.WriteLine($"{i + 1}) {distro_list[i]}"); }
+            
+
+            while (true) // Loop for user input
+            {
+                // Stops the script if there aren't any 
+                if (distro_list.Length == 0) { Console.WriteLine("No valid distributions found! Install a distrubution (Excluding docker) to proceed."); Environment.Exit(1); }
+
+                // Skips selection if there is only one available distribution
+                else if (distro_list.Length == 1) { Console.WriteLine("Only one valid distribution detected, auto-selecting...\n"); distro = distro_list[0].Replace(" (Default)", ""); break; }
+
+
+
+                Console.WriteLine("Please select the distribution to use for the backend:\n>");
+                Console.SetCursorPosition(2, Console.CursorTop - 1);
+                string distro_number = Console.ReadLine() ?? "NULL";
+
+                // Checks if number is valid
+                // Checks -> Not an int, Value lower than 1, Value higher than the length of the distro list
+                if (int.TryParse(distro_number, out _) is false || Int32.Parse(distro_number) < 1 || Int32.Parse(distro_number) > distro_list.Length) { Console.WriteLine("Invalid input!"); continue; }
+
+                // Assigns distro
+                distro = distro_list[Int32.Parse(distro_number) - 1];
+
+                break;
+            }
+
+
+
+
+            // --> Main <--
+
+            // - MOUNT -
+
+            // Disk labels & \\.\PHYSICALDRIVE path
+            Console.WriteLine("Getting disks...");
+
+            // Later used for disk label confirmation
+            disk_list = run_cmd("GET-CimInstance -query \\\"SELECT DeviceID,Caption from Win32_DiskDrive\\\" | Select-Object DeviceID,Caption | Sort-Object DeviceID").Item1;
+            Console.WriteLine(disk_list);
+
+
+
+            while (true) // Input loop
+            {
+                Console.Write("Select disk number:\n>");
                 Console.SetCursorPosition(2, Console.CursorTop);
-                string mode = Console.ReadLine() ?? "NULL";
+                disk_number = Console.ReadLine() ?? "NULL"; // Later used for SUBST command
+
+
+                // Int check for user input
+                // Checks -> Not an int, Null number, Value lower than 0, Value higher than the PHYSICALDRIVE output with subtracted extra lines)
+                if (int.TryParse(disk_number, out _) is false || disk_number == "NULL" || Int32.Parse(disk_number) < 0 || Int32.Parse(disk_number) > disk_list.Split("\n").Length - 5)
+                { Console.WriteLine("Invalid input!"); continue; }
 
 
 
 
-                // MOUNT MODE
+                // Splits the disk list into newlines, if it finds the correct disk pulls the label
+                foreach (string line in disk_list.Split('\n'))
+                {
+                    // Splits line into list by spaces
+                    string[] line_split = line.TrimEnd().Split(' ');
 
-                if (mount.Contains(mode.ToLower()))
+                    // If the correct disk is found, gets the disk label for confirmation
+                    if (line_split[0] == $"\\\\.\\PHYSICALDRIVE{disk_number}") { disk_label = string.Join(" ", line_split.Skip(1).ToArray()) ?? "NULL"; }
+                }
+
+                // Null check
+                if (disk_label == "NULL") { Console.WriteLine("Disk label was read as NULL"); Environment.Exit(1); }
+
+
+                // Disk label confirmation
+
+                Console.WriteLine($"You selected {disk_label}, is that correct? [Y/N]\n>");
+                Console.SetCursorPosition(2, Console.CursorTop - 1);
+                string input = Console.ReadLine() ?? "NULL";
+
+                if (yes.Contains(input.ToLower())) { break; }
+
+            }
+
+
+
+        Letter_select:
+
+            Console.WriteLine("Please select desired drive letter:\n>");
+            Console.SetCursorPosition(2, Console.CursorTop - 1);
+            drive_letter = Console.ReadLine() ?? "C"; // C will mark as invalid
+
+            // Checks -> if the letter doesn't contain an alphabetical character, if there was more than one char inputted or if is already used
+            if (!alphabet.Contains(drive_letter.ToLower()) || drive_letter.Length > 1 || Directory.Exists($"{drive_letter}:\\"))
+            { Console.WriteLine("Letter already in use or invalid letter inputted!"); goto Letter_select; }
+
+
+            // Loops through each line of "subst" to see if one already exists for specified drive letter
+            foreach (var line in run_cmd("subst").Item1.Split('\n')) // Splits 'subst' into lines
+            {
+                if (line.Split(' ').Contains($@"{drive_letter.ToUpper()}:\:")) { Console.WriteLine($"{drive_letter} already SUBST-ed!"); goto Letter_select; }
+            }
+
+            Console.WriteLine($@"Selected {drive_letter.ToUpper()}:\");
+
+
+
+
+
+            // WSL Mount
+
+            Console.WriteLine("Mounting Disk to WSL (This requires administrative privileges)...");
+            run_elevated_cmd(wsl_dir, @$"--mount \\.\PHYSICALDRIVE{disk_number} --bare");
+            // No error code management, as the disk will either mount or just stay mounted
+            // Other errors aren't possible, the syntax is set and the dir has already been tested.
+            Console.WriteLine("Disk mounted succesfully!");
+
+
+
+            // Gets list of partitions of non-virtualized disks
+
+            Console.WriteLine("Starting WSL process & getting mounted volumes...\n");
+            Process wsl = new();
+            wsl.StartInfo.FileName = wsl_dir;
+            wsl.StartInfo.Arguments = "-u root blkid | grep \"$(sudo lshw -class disk | grep \"logical name\" | awk '{print $3}')\"";
+            wsl.StartInfo.UseShellExecute = false;
+            wsl.StartInfo.RedirectStandardInput = true;
+            wsl.StartInfo.RedirectStandardOutput = true;
+            wsl.Start();
+            string wsl_output = wsl.StandardOutput.ReadToEnd();
+            wsl.WaitForExit();
+
+
+
+            // Prints out list of disk partitions
+            Console.WriteLine(wsl_output);
+
+
+
+            while (true) // Input loop
+            { 
+
+
+                Console.WriteLine("Select partition [sdXY]:\n>");
+                Console.SetCursorPosition(2, Console.CursorTop - 1);
+                part_name = Console.ReadLine() ?? "NONE";
+
+                Console.WriteLine($"Selected {part_name.ToLower()}, is that correct? [Y/N]\n>");
+                Console.SetCursorPosition(2, Console.CursorTop - 1);
+                string conf = Console.ReadLine() ?? "NONE";
+
+
+                // User input check
+                if (yes.Contains(conf)) { break; }
+            }
+
+
+
+            // A mess, but it works!
+
+            foreach (var line in wsl_output.Split('\n')) // Splits list of partitions into lines
+            {
+                // If the line doesn't contain the correct partition, skip to the next iteration
+                if (!line.Contains(part_name.ToLower())) { continue; }
+
+
+                foreach (string parameter in line.Split(' ')) // Split the correct line into parameters (A="B" C="D" etc.)
                 {
 
-                    // - Disk labels & \\.\PHYSICALDRIVE path -
-                    Console.WriteLine("Getting disks...");
+                    string[] param_list = parameter.Split('='); // Separates the parameters contents from the parameter itself
 
-                    // Later used for disk label confirmation
-                    disk_list = run_cmd("GET-CimInstance -query \\\"SELECT DeviceID,Caption from Win32_DiskDrive\\\" | Select-Object DeviceID,Caption | Sort-Object DeviceID").Item1;
-                    Console.WriteLine(disk_list);
-
+                    
+                    // If the value isn't a parameter, skip to the next iteration
+                    if (!parameter.Contains("=")) { continue; }
 
 
-                    while (true)
+
+                    if (param_list[0] == "PARTUUID") // If the PARTUUID parameter is found
                     {
-                        Console.Write("Select disk number:\n>");
-                        Console.SetCursorPosition(2, Console.CursorTop);
-                        disk_number = Console.ReadLine() ?? "NULL"; // Later used for SUBST command
+                        param_contents = param_list[1].Replace("\"", "");
 
+                        // Mounts drive using a passed WSL command, bypassing WSL kernel modules used in `wsl.exe --mount`
+                        Process wsl_mount = new();
+                        wsl_mount.StartInfo.FileName = wsl_dir;
+                        // Makes the directory for the disk drive | Mounts the disk as an user | Exits the process safely
+                        wsl_mount.StartInfo.Arguments = $"-u root sudo mkdir -p /mnt/wsl/{param_contents} && sudo mount -O uid=1000,gid=1000 '{parameter}' '/mnt/wsl/{param_contents}' && exit";
+                        wsl_mount.StartInfo.UseShellExecute = false;
+                        wsl_mount.StartInfo.RedirectStandardInput = true;
 
-                        // Gets selected disk label
+                        wsl_mount.Start();
+                        wsl_mount.WaitForExit();
 
-                        foreach (string line in disk_list.Split('\n'))
+                        wsl_mounted = true;
+
+                        if (wsl_mount.ExitCode == 0) { Console.WriteLine("Disk mounted to WSL succesfully!"); }
+                        else
                         {
-                            string[] line_split = line.TrimEnd().Split(' ');
-                            if (line_split[0] == $"\\\\.\\PHYSICALDRIVE{disk_number}")
-                            {
-                                disk_label = string.Join(" ", line_split.Skip(1).ToArray()) ?? "NULL";
-                            }
-                        }
-
-                        if (disk_label == "NULL")
-                        { throw new Exception("Disk label was read as NULL"); }
-
-
-                        // Disk label confirmation
-                        Console.WriteLine($"You selected {disk_label}, is that correct? [Y/N]\n>");
-                        Console.SetCursorPosition(2, Console.CursorTop - 1);
-                        string input = Console.ReadLine() ?? "NULL".ToLower();
-
-
-                        if (yes.Contains(input.ToLower()))
-                        {
-
-                            while (dtc == true)
-                            {
-                                dtc = false; // While loop will end if no security detection is made
-                                Console.WriteLine("Please select desired drive letter:\n>");
-                                Console.SetCursorPosition(2, Console.CursorTop - 1);
-                                drive_letter = Console.ReadLine() ?? "C"; // C will mark as invalid
-
-                                if (!alphabet.Contains(drive_letter) || drive_letter.Length > 1 || Directory.Exists($"{drive_letter}:\\"))
-                                { Console.WriteLine("Letter already in use or invalid letter inputted!"); dtc = true; }
-
-
-
-                                else
-                                {
-
-                                    // Loops through each line of "subst" to see if one already exists for specified drive letter
-                                    foreach (var line in run_cmd("subst").Item1.Split('\n')) // Splits 'subst' into lines
-                                    {
-
-                                        if (line.Split(' ').Contains($@"{drive_letter.ToUpper()}:\:"))
-                                        {
-                                            Console.WriteLine($"{drive_letter} already SUBST-ed!"); dtc = true; break; // If the line contains the drive letter, break out of the for loo
-                                        }
-
-                                    }
-
-                                }
-                            }
-                            break;
-                        }
-                    }
-
-                    Console.WriteLine($"Selected {drive_letter}:\\");
-
-
-
-                    Console.WriteLine("Mounting Disk to WSL (This requires administrative privileges)...");
-                    run_elevated_cmd(wsl_dir, @$"--mount \\.\PHYSICALDRIVE{disk_number}");
-                    // No error code management, as the disk will either mount or just stay mounted
-
-
-
-                    // Gets list of partitions of non-virtualized disks
-
-                    Console.WriteLine("Starting WSL process & getting mounted disks' partitions...");
-                    Process wsl = new Process();
-                    wsl.StartInfo.FileName = wsl_dir;
-                    wsl.StartInfo.Arguments = "-u root blkid | grep \"$(sudo lshw -class disk | grep \"logical name\" | awk '{print $3}')\" && exit";
-                    wsl.StartInfo.UseShellExecute = false;
-                    wsl.StartInfo.RedirectStandardInput = true;
-                    wsl.StartInfo.RedirectStandardOutput = true;
-                    wsl.Start();
-                    string wsl_output = wsl.StandardOutput.ReadToEnd();
-                    wsl.WaitForExit();
-
-                    // Prints out list of disk partitions
-                    Console.WriteLine(wsl_output);
-
-                    while (true) // Loop for user input
-                    {
-
-                        Console.WriteLine("Select partition [sdXY]:\n>");
-                        Console.SetCursorPosition(2, Console.CursorTop - 1);
-                        string part_no = Console.ReadLine() ?? "NONE";
-
-                        Console.WriteLine($"Selected {part_no.ToLower()}, is that correct?\n>");
-                        Console.SetCursorPosition(2, Console.CursorTop - 1);
-                        string conf = Console.ReadLine() ?? "NONE";
-
-                        // welcome to indentation hell
-
-                        if (yes.Contains(conf)) // User input check
-                        {
-
-                            foreach (string line in wsl_output.Split('\n')) // Splits list of partitions into lines
-                            {
-
-                                if (line.Contains(part_no.ToLower())) // If the line contains the correct partition, continue
-
-                                {
-                                    foreach (string parameter in line.Split(' ')) // Split the correct line into parameters (A="B" C="D" etc.)
-                                    {
-
-                                        string[] param_info = parameter.Split('='); // Separates the parameters contents from the parameter itself
-
-                                        // If the line split is indeed a parameter, make it readable by removing quotation marks
-                                        if (parameter.Contains("=")) { param_contents = param_info[1].Replace("\"", ""); }
-
-
-                                        else { continue; }
-
-
-                                        if (param_info[0] == "PARTUUID") // If the PARTUUID parameter is found
-                                        {
-
-                                            // Mounts drive using a passed WSL command, bypassing WSL kernel modules used in wsl.exe --mount
-                                            Process wsl_mount = new Process();
-                                            wsl_mount.StartInfo.FileName = wsl_dir;
-                                            wsl_mount.StartInfo.Arguments = $"-u root";
-                                            wsl_mount.StartInfo.UseShellExecute = false;
-                                            wsl_mount.StartInfo.RedirectStandardInput = true;
-                                            wsl_mount.Start();
-                                            StreamWriter wsl_mount_input = wsl_mount.StandardInput;
-
-                                            // Makes the directory for the disk drive | Mounts the disk as an user | Exits the process safely
-                                            wsl_mount_input.Write(@$"sudo mkdir -p /mnt/wsl/{param_contents} && sudo mount -O uid=1000,gid=1000 '{parameter}' '/mnt/wsl/{param_contents}' && exit");
-
-                                            wsl_mount_input.Close();
-                                            wsl_mount.WaitForExit();
-                                            //sudo mkdir -p /mnt/abc && sudo mount -O uid=1000,gid=1000 'PARTUUID="1fdd2df9-018b-4308-b328 - bee3f3721e52"' '/mnt/abc'
-
-                                            if (wsl_mount.ExitCode == 0)
-                                            {
-                                                Console.WriteLine("Disk mounted to WSL succesfully!");
-                                            }
-                                            else
-                                            {
-                                                Console.WriteLine("Something went wrong with mounting, stopping program!");
-                                                run_cmd("PAUSE");
-                                                Environment.Exit(1);
-                                            }
-                                        }
-
-                                    }
-
-                                }
-                            }
-                            break;
-                        }
-
-                        // Temporary fix
-                        Console.WriteLine("Running SUBST on disk, please do not close this window until you want the drive letter to be discarded!");
-                        Console.WriteLine("Note that this is merely a temporary fix until a fix is developed.");
-                        Tuple<string, int> subst_cmd = run_cmd(@$"subst {drive_letter}: \\WSL$\Ubuntu\mnt\wsl\{param_contents}");
-
-                        if (subst_cmd.Item2 == 0)
-                        {
-                            Console.WriteLine($"SUBST Succesful! \n Partition succesfully mounted on {drive_letter}:\\");
+                            Console.WriteLine("Something went wrong with mounting, stopping program!");
                             run_cmd("PAUSE");
-                            Console.WriteLine(@$"Unpaused shell, SUBST will not work anymore. The disk will remain mounted in \\WSL$\<distro>\mnt\wsl\{param_contents} indefinitely.");
-                            Environment.Exit(0);
+                            goto Unmount; // Cleans up mounts
                         }
-                        else { Console.WriteLine(@"SUBST failed! (Is \\WSL$\ available?) "); run_cmd("PAUSE"); Environment.Exit(1); }
-
                     }
-
-
-
-
-
                 }
-                // TODO: Unmount mode for new version
-                // Current version borked, pending update
+                break;  // This only gets reached once the mounting is done, breaks out of the initial foreach loop.
+            }
 
-                // UNMOUNT MODE
-                //else if (unmount.Contains(mode.ToLower()))
-                else if (!true)
+
+
+
+            // Sub-optimal solution, but it works (The console window has to stay open for the SUBST to remain)
+            // This will get addressed in the GUI version.
+
+            Console.WriteLine("Running SUBST on disk...");
+
+            Tuple<string, int> subst_cmd = run_cmd($@"subst {drive_letter}: \\WSL$\{distro}\mnt\wsl\{param_contents}");
+
+            if (subst_cmd.Item2 == 0)
+            {
+                subst_passed = true;
+                Console.WriteLine($"SUBST Succesful! \n Partition succesfully mounted on {drive_letter.ToUpper()}:\\");
+                Console.WriteLine("Shell paused, please do not close this window until you want the drive letter to be discarded! Pressing enter will automatically unmount.");
+                run_cmd("PAUSE");
+                Console.WriteLine(@$"Unpaused shell, unmounting");
+            }
+            else { Console.WriteLine("SUBST failed! (Is \\\\WSL$\\ available?) Command output: \n"); run_cmd("PAUSE"); goto Unmount; }
+
+
+
+
+        // - UNMOUNT -
+       
+        Unmount:
+
+            Console.WriteLine("\n\n--- Cleaning up! ---\n");
+
+            // Un-SUBST, performed if it happened prior to any errors
+            if (subst_passed)
+            {
+                Console.WriteLine("Un-SUBST-ing volume...");
+                Tuple<string, int> subst_result = run_cmd($"subst {drive_letter}: /d");
+
+                if (subst_result.Item2 == 1)
                 {
-
-                    // SUBST UNMOUNT
-                    // Gets the list of network drives
-                    while (true)
-                    {
-
-                        subst_output = run_cmd("subst").Item1 ?? "";
-                        Console.WriteLine($"Current substs:\n{subst_output}");
-                        Console.WriteLine("Select SUBST letter to unmount [<empty>/q/quit to cancel]:\n>");
-                        Console.SetCursorPosition(2, Console.CursorTop - 1);
-                        string select = Console.ReadLine() ?? "NULL";
-
-                        foreach (var line in subst_output.Split('\n')) // Splits the 'subst' command into lines
-                        {
-                            if (quit.Contains(select.ToLower()))
-                            { Console.WriteLine("Quitting!"); Environment.Exit(0); }
-
-                            else if (line.Split(' ').Contains($@"{select.ToUpper()}:\:")) // If the line contains the desired unmount letter, proceeds to unmount
-                            {
-                                Tuple<string, int> cmd = run_cmd($"subst {select}: /d"); // Unmount command
-
-                                if (cmd.Item2 == 0)
-                                {
-                                    Console.WriteLine($"Succesfully removed the {select.ToUpper()}:\\ subst!");
-
-                                    // Getting PHYSICALDRIVE number, as it doesn't exist within the UNMOUNT context
-                                    foreach (var term in line.Split(' '))
-                                    {
-                                        if (term.Contains(@"\Ubuntu\mnt\wsl\"))
-                                        { disk_label = term.Substring(term.IndexOf("PHYSICALDRIVE"), 14); }
-                                    }
-                                    break;
-                                }
-
-                                else { Console.WriteLine("Something done broke with SUBST! Command output:\n" + cmd.Item1); run_cmd("PAUSE"); Environment.Exit(0); }
-                            }
-                            else { Console.WriteLine("Letter not in use or invalid letter inputted!"); }
-
-                        }
-                        break;
-                    }
-
-
-                    // WSL UNMOUNT
-                    // Unmounts the disk in WSL, doesn't use run_cmd because of elevation
-
-                    Console.WriteLine("Unmounting disk from WSL (This requires administrative privileges)...");
-                    int proc = run_elevated_cmd("C:\\Windows\\System32\\wsl.exe", $"--unmount \\\\.\\{disk_label}");
-
-                    if (proc != 0)
-                    {
-                        Console.WriteLine(@"Disk unmounted from WSL UNSUCCESFULLY! (Is it mounted? Check `\\WSL$\<distro>\mnt\wsl` to see if a disk folder is present)");
-                        run_cmd("PAUSE");
-                        Environment.Exit(1);
-                    }
-                    else if (proc == 0)
-                    {
-                        Console.WriteLine("DIsk unmounted from WSL succesfully");
-                        run_cmd("PAUSE");
-                        Environment.Exit(0);
-                    }
+                    Console.WriteLine($"Failed to un-SUBST volume! Command output: {subst_result.Item1}");
+                    run_cmd("PAUSE");
+                    Environment.Exit(1);
                 }
+                Console.WriteLine("Succesfully Un-SUBST-ed!\n");
+            }
 
-                else { Console.Write("Incorrect input!\n"); }
+
+            // WSL Partition unmount, performed if it happened prior to any errors
+            if (wsl_mounted)
+            {
+                Console.WriteLine("Unmounting partition in WSL...");
+                Tuple<string, int> wsl_part_unmount = run_cmd($"{wsl_dir} -u root umount /mnt/wsl/{param_contents}");
+
+                if (wsl_part_unmount.Item2 == 1)
+                {
+                    Console.WriteLine($"Failed to unmount partition in WSL!");
+                    run_cmd("PAUSE");
+                    Environment.Exit(1);
+                }
+                Console.WriteLine("Partition succesfully unmounted!\n");
+            }
+
+            
+
+            // WSL Disk unmount, happens regardless as any errors earlier than it exit the process (as no changes were made)
+            Console.WriteLine("Unmounting disk from WSL (This requires administrative privileges)...");
+    
+            if (run_elevated_cmd("C:\\Windows\\System32\\wsl.exe", $"--unmount \\\\.\\PHYSICALDRIVE{disk_number}") == 0)
+            {
+                Console.WriteLine("Disk unmounted from WSL succesfully!\n");
+                run_cmd("PAUSE");
+                Environment.Exit(0);
+            }
+
+            else // Any exit code besides 0 is a failure
+            {
+                Console.WriteLine(@"Disk unmounted from WSL UNSUCCESFULLY! (Is it mounted? Check `\\WSL$\<distro>\mnt\wsl` to see if a disk folder is present");
+                run_cmd("PAUSE");
+                Environment.Exit(1);
             }
         }
+
     }
 }

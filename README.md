@@ -1,3 +1,5 @@
+NOTE: This repository has been archived in light of the GUI rewrite being developed.
+
 # Universal-disk-mounter
 
 - Mounts partition to user selected drive letter
